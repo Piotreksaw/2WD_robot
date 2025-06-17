@@ -34,34 +34,34 @@ $(wildcard ../makefile.init) \
 $(wildcard ../makefile.targets) \
 
 
-BUILD_ARTIFACT_NAME := PSW_Projekt
+BUILD_ARTIFACT_NAME := 2WD_robot
 BUILD_ARTIFACT_EXTENSION := elf
 BUILD_ARTIFACT_PREFIX :=
 BUILD_ARTIFACT := $(BUILD_ARTIFACT_PREFIX)$(BUILD_ARTIFACT_NAME)$(if $(BUILD_ARTIFACT_EXTENSION),.$(BUILD_ARTIFACT_EXTENSION),)
 
 # Add inputs and outputs from these tool invocations to the build variables 
 EXECUTABLES += \
-PSW_Projekt.elf \
+2WD_robot.elf \
 
 MAP_FILES += \
-PSW_Projekt.map \
+2WD_robot.map \
 
 SIZE_OUTPUT += \
 default.size.stdout \
 
 OBJDUMP_LIST += \
-PSW_Projekt.list \
+2WD_robot.list \
 
 
 # All Target
 all: main-build
 
 # Main-build Target
-main-build: PSW_Projekt.elf secondary-outputs
+main-build: 2WD_robot.elf secondary-outputs
 
 # Tool invocations
-PSW_Projekt.elf PSW_Projekt.map: $(OBJS) $(USER_OBJS) C:\Users\psw_ea\Desktop\PSW_Projekt\STM32F303RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "PSW_Projekt.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\psw_ea\Desktop\PSW_Projekt\STM32F303RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="PSW_Projekt.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+2WD_robot.elf 2WD_robot.map: $(OBJS) $(USER_OBJS) C:\Users\Piotr\Documents\Projekty\2WD_robot\STM32F303RETX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "2WD_robot.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\Piotr\Documents\Projekty\2WD_robot\STM32F303RETX_FLASH.ld" --specs=nosys.specs -Wl,-Map="2WD_robot.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
@@ -70,14 +70,14 @@ default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-PSW_Projekt.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "PSW_Projekt.list"
+2WD_robot.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "2WD_robot.list"
 	@echo 'Finished building: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(RM) PSW_Projekt.elf PSW_Projekt.list PSW_Projekt.map default.size.stdout
+	-$(RM) 2WD_robot.elf 2WD_robot.list 2WD_robot.map default.size.stdout
 	-@echo ' '
 
 secondary-outputs: $(SIZE_OUTPUT) $(OBJDUMP_LIST)

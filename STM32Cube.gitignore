@@ -6,7 +6,7 @@ tmp/
 *.swp
 *~.nib
 local.properties
-2WD/.settings/
+.settings/
 .loadpath
 .recommenders
 
