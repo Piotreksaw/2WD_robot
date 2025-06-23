@@ -32,8 +32,14 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+// dla dalszego rozwoju pod wyświetlacz
 #define EDGES_PER_REV   24.0f
 #define RPM_UPDATE_MS   100
+
+#define JOYSTICK_INTERVAL 2000
+#define JOYSTICK_PERIOD 100
+#define JOYSTICK_LICZNIK_MAX (JOYSTICK_INTERVAL/JOYSTICK_PERIOD)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,6 +55,7 @@ I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart2;
 
@@ -65,6 +72,7 @@ static void MX_ADC2_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -73,34 +81,45 @@ static void MX_I2C1_Init(void);
 /* USER CODE BEGIN 0 */
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim6;
-uint32_t edgeCount = 0;
-uint32_t edgeCount1 = 0;
-uint32_t lastCount = 0;
-uint32_t lastTime = 0;
-uint32_t rpm = 0;
+
+// obsługa pomiaru czasu
 uint32_t currentTC=0;
 uint32_t previousTC=0;
 uint32_t period = 200;
+
+// pomiar odległości
+float odleglosc_meas;
+float odleglosc_zadana = 20.0;
+
+float Kp_odl = 0.3;
+
+uint32_t start;
+uint32_t stop;
+uint32_t pulse_width;
+
+// pomiar z enkodera transoptorowego
+uint32_t edgeCountL = 0;
+uint32_t edgeCountP = 0;
+
+// obsługa joysticka
 int temp = 0;
-int32_t duty = 0;
-int32_t dir  = 1;
-float set_count = 40.0f;
+int32_t dir  = 0; // dir: 0 - środek, 1 - przód, 2 - tył
+int32_t joystick_counter = 0;
+float inc = 2.0f;
+
+// nastawy do regulatora prędkości
+float pred_zadana_backup = 40.0f;
 float Kp = 1.5f;
 float Ki = 1.0f;
 float Kp1 = 0.5f;
 float Ki1 = 0.25f;
-float I_reg_p = 0.0f;
-float I_reg_p1 = 0.0f;
+float I_pred_L_prev = 0.0f;
+float I_pred_P_prev = 0.0f;
 float Ts = 0.1f;
 
 
 
-void Start_Pulse_Counter(void);
-uint32_t Read_Pulse_Count(void);
-void CalculateRPM(void);
-
 uint16_t Joystick[] = {0, 0};
-
 int __io_putchar(int ch)
 {
   if (ch == '\n') {
@@ -113,12 +132,74 @@ int __io_putchar(int ch)
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
 	if(GPIO_Pin == enkoder_Pin){
-		edgeCount++;
+		edgeCountL++;
 	}
 	if(GPIO_Pin == encoder1_Pin){
-			edgeCount1++;
+			edgeCountP++;
 		}
 
+}
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM2)
+    {
+        if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+        {
+        	start = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+        }
+        else if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
+        {
+        	stop = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+
+
+            if (stop >= start)
+                pulse_width = stop - start;
+            else
+                pulse_width = (0xFFFF - start + stop);
+        }
+    }
+}
+
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if(htim->Instance == TIM3){
+		//	zmniejszenie zadanej odległości
+			if(Joystick[0] < 200){
+				if(dir != 2)
+				{
+					joystick_counter = 0;
+					dir = 2;
+				}
+				else {
+
+					joystick_counter++;
+					if(joystick_counter >= JOYSTICK_LICZNIK_MAX)
+					{
+					odleglosc_zadana -= inc;
+					joystick_counter = 0;
+					}
+				}
+			}
+		//	zwiększenie zadanej odległości
+			else if(Joystick[0] > 3800){
+				if(dir != 1)
+				{
+					joystick_counter = 0;
+					dir = 1;
+				}
+				else {
+
+					joystick_counter++;
+					if(joystick_counter >= JOYSTICK_LICZNIK_MAX)
+					{
+					odleglosc_zadana += inc;
+					joystick_counter = 0;
+					}
+				}
+			}
+		}
 }
 
 
@@ -160,6 +241,7 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_I2C1_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
   HAL_ADC_Start_DMA(&hadc2, (long unsigned int *)Joystick, 2);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
@@ -167,7 +249,8 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
   HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_2);
-  HAL_Init();
+  HAL_TIM_Base_Start_IT(&htim3);
+  HAL_TIM_PeriodElapsedCallback(&htim3);
 
   /* USER CODE END 2 */
 
@@ -175,93 +258,72 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  temp = (int)roundf(200.0f * (1.0f - ((float)Joystick[0] / 4096.0f))-2);
 
   currentTC = HAL_GetTick();
   if ((currentTC - previousTC) > period){
-    printf("%d %d \n", Joystick[0], Joystick[1]);
-    temp = (int)roundf(200.0f * (1.0f - ((float)Joystick[0] / 4096.0f))-2);
 
-    uint32_t start = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_1);
-    uint32_t stop = HAL_TIM_ReadCapturedValue(&htim2, TIM_CHANNEL_2);
-    //printf("%.1f cm\n", (stop - start) / 58.0f);
+//		obliczanie odlgełości
+	  odleglosc_meas = pulse_width / 58.0f;
+	  float uchyb_odl = odleglosc_zadana - odleglosc_meas;
 
-
-    //silnik pierwszy
-    uint32_t pulse_count = edgeCount;
-    edgeCount = 0;
-
-    float eerror = set_count - (float)pulse_count;
+	  float predosc_zadana = Kp_odl * uchyb_odl;
 
 
-    float P_reg = Kp * eerror;
+	  /* silnik lewy */
+	  uint32_t pulse_count = edgeCountL;
+	  edgeCountL = 0;
 
-    float I_reg = I_reg_p + Ki *(float)eerror * Ts;
-
-    float u = P_reg + I_reg;
-
-    uint32_t u_sat = (uint32_t) u;
-    if (u_sat > 100){
-      u_sat = 100;
-    } else if (u_sat < 0){
-      u_sat = 0;
-    }else {
-      I_reg_p =I_reg;
-    }
-    
-    // silnik drugi
-    uint32_t pulse_count1 = edgeCount1;
-    edgeCount1 = 0;
-
-    float eerror1 = set_count - (float)pulse_count1;
+	  float uchyb_pred_L = predosc_zadana - (float)pulse_count;
+	  float P_pred_L = Kp * uchyb_pred_L;
+	  float I_pred_L = I_pred_L_prev + Ki *(float)uchyb_pred_L * Ts;
+	  float uL = P_pred_L + I_pred_L;
 
 
-    float P_reg1 = Kp1 * eerror1;
+//	  anti windup
+	  uint32_t u_satL = (uint32_t) uL;
+	  if (u_satL > 100) u_satL = 100;
+	  else if (u_satL < 0) u_satL = 0;
+	  else I_pred_L_prev =I_pred_L;
 
-    float I_reg1 = I_reg_p1 + Ki1 *(float)eerror1 * Ts;
+	  /* silnik prawy */
+	  uint32_t pulse_count1 = edgeCountP;
+	  edgeCountP = 0;
 
-    float u1 = P_reg1 + I_reg1;
+	  float uchyb_pred_P = predosc_zadana - (float)pulse_count1;
+	  float P_pred_P = Kp1 * uchyb_pred_P;
+	  float I_pred_P = I_pred_P_prev + Ki1 *(float)uchyb_pred_P * Ts;
+	  float uP = P_pred_P + I_pred_P;
 
-    uint32_t u_sat1 = (uint32_t) u1;
-    if (u_sat1 > 100){
-      u_sat1 = 100;
-    } else if (u_sat1 < 0){
-      u_sat1 = 0;
-    }else {
-      I_reg_p1 =I_reg1;
-    }
-    printf("Silnik 1 - Duty: %ld, speed: %ld \tSilnik 2 -  Duty: %ld, speed: %ld \n", u_sat, pulse_count, u_sat1, pulse_count1);
 
-    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_RESET);
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 100);//usat1
-    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 100);
+//	  anti windup
+	  uint32_t u_satP = (uint32_t) uP;
+	  if (u_satP > 100) u_satP = 100;
+	  else if (u_satP < 0) u_satP = 0;
+	  else I_pred_P_prev =I_pred_P;
 
-  //			if (temp == 100){
-  //				HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_RESET);
-  //				HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
-  //				HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_RESET);
-  //				HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_RESET);
-  //				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
-  //				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-  //			} else if (temp > 100){
-  //				duty = temp - 100;
-  //				HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_SET);
-  //				HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
-  //				HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_SET);
-  //				HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_RESET);
-  //				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty);
-  //				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty);
-  //			} else {
-  //				duty = 100 - temp;
-  //				HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_RESET);
-  //				HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_SET);
-  //				HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_RESET);
-  //				HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_SET);
-  //				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, duty);
-  //				__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, duty);
-  //			}
+	  printf("Silnik 1 - Duty: %ld, speed: %ld \tSilnik 2 -  Duty: %ld, speed: %ld \n", u_satL, pulse_count, u_satP, pulse_count1);
+
+
+//	  uchyb mniejszy od 0 to pojazd jest za daleko
+	  if(uchyb_odl < 0){
+	    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_SET);
+	    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
+	    HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_SET);
+	    HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_RESET);
+	  }
+//	  uchyb wiekszy od 0 to pojazd jest za blisko
+	  else
+	  {
+	    HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_RESET);
+	    HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_SET);
+	    HAL_GPIO_WritePin(IN3_GPIO_Port, IN3_Pin, GPIO_PIN_RESET);
+	    HAL_GPIO_WritePin(IN4_GPIO_Port, IN4_Pin, GPIO_PIN_SET);
+	  }
+
+	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, u_satL);
+	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, u_satP);
+
     previousTC = currentTC;
 	 }else {
 
@@ -312,11 +374,13 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART2|RCC_PERIPHCLK_I2C1
-                              |RCC_PERIPHCLK_TIM1|RCC_PERIPHCLK_TIM2;
+                              |RCC_PERIPHCLK_TIM1|RCC_PERIPHCLK_TIM2
+                              |RCC_PERIPHCLK_TIM34;
   PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
   PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
   PeriphClkInit.Tim1ClockSelection = RCC_TIM1CLK_HCLK;
   PeriphClkInit.Tim2ClockSelection = RCC_TIM2CLK_HCLK;
+  PeriphClkInit.Tim34ClockSelection = RCC_TIM34CLK_HCLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -543,7 +607,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 79;
+  htim2.Init.Prescaler = 71;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 99999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -597,6 +661,51 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 7199;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 999;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
 
 }
 
